@@ -82,7 +82,7 @@ Antes de empezar, verifica:
 | [**01**](01-setup.md) | Configuración y Context Engineering | Crea tu repositorio, prepara tu entorno y dale a Copilot el contexto adecuado |
 | [**02**](02-plan-and-scaffold.md) | Planificar y Estructurar | Diseña la API y la arquitectura de páginas antes de implementar |
 | [**03**](03-agent-mode.md) | Construir el Juego | Conecta la página de batalla y los gráficos de contribuciones con ayuda agéntica |
-| [**04**](04-design-vibes.md) | Diseño Visual Primero | Transforma la estructura base en una experiencia retro arcade |
+| [**04**](04-design-vibes.md) | Temas Design-First | Transforma la estructura base en una experiencia retro arcade |
 | [**05**](05-polish.md) | Pulido y Trabajo Paralelo | Usa flujos de trabajo multi-agente para mejorar UX, resiliencia y calidad |
 | [**06**](06-bonus.md) | Bonus y Extensiones | Explora funcionalidades abiertas, flujos de trabajo de compartición y experimentos extra |
 
