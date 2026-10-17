@@ -2,16 +2,353 @@
 
 ---
 
-<html lang="en">
+<html lang="ko">
 	<head>
 		<meta charset="utf-8" />
 		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 		<meta name="viewport" content="width=device-width" />
 		<meta name="generator" content={Astro.generator} />
-		<title>Mona Mayhem</title>
+		<meta name="description" content="두 GitHub 사용자의 기여 활동을 비교하는 Mona Mayhem 배틀 아레나" />
+		<title>Mona Mayhem - GitHub Contribution Battle Arena</title>
 	</head>
 	<body>
-		<h1>Mona Mayhem</h1>
-		<p>Welcome to Mona Mayhem! Time to build a GitHub Contribution Battle Arena.</p>
+		<main>
+			<header>
+				<h1>Mona Mayhem</h1>
+				<p>GitHub Contribution Battle Arena</p>
+				<p>두 플레이어의 GitHub 기여 활동을 비교해 보세요.</p>
+			</header>
+
+			<form id="battle-form" novalidate aria-describedby="battle-rules">
+				<div class="players">
+					{[1, 2].map((player) => (
+						<div class="player-input">
+							<label for={`player-${player}`}>플레이어 {player}</label>
+							<input
+								id={`player-${player}`}
+								name={`player-${player}`}
+								type="text"
+								placeholder={player === 1 ? 'octocat' : 'torvalds'}
+								required
+								maxlength="39"
+								autocomplete="off"
+								autocapitalize="none"
+								spellcheck="false"
+								aria-describedby="battle-error"
+							/>
+						</div>
+					))}
+				</div>
+				<p id="battle-rules">GitHub 기본 조회 기간의 총 기여 수로 승부합니다. 기여 수가 같으면 무승부입니다.</p>
+				<button type="submit">배틀 시작</button>
+			</form>
+
+			<p id="battle-status" role="status"></p>
+			<p id="battle-error" role="alert"></p>
+
+			<section id="results" aria-labelledby="result-title" hidden>
+				<h2 id="result-title">배틀 결과</h2>
+				<p id="winner"></p>
+				<div class="result-cards">
+					{[1, 2].map((player) => (
+						<>
+							{player === 2 && <p class="versus" aria-hidden="true">VS</p>}
+							<article id={`result-${player}`} aria-labelledby={`username-${player}`}>
+								<h3 id={`username-${player}`}></h3>
+								<p class="total"></p>
+								<p class="date-range"></p>
+								<div class="graph-scroll" tabindex="0" role="region" aria-label={`플레이어 ${player} 일별 기여 그래프 (가로 스크롤)`}>
+									<ul class="graph" role="list" aria-label="날짜별 기여 수"></ul>
+								</div>
+								<div class="legend" aria-label="기여 강도: 적음에서 많음">
+									<span>적음</span>
+									<span class="swatches" aria-hidden="true"></span>
+									<span>많음</span>
+								</div>
+							</article>
+						</>
+					))}
+				</div>
+			</section>
+			<noscript>배틀 기능을 사용하려면 JavaScript를 활성화해 주세요.</noscript>
+		</main>
 	</body>
 </html>
+
+<script>
+	interface ContributionDay {
+		date: string;
+		count: number;
+		level: number;
+	}
+
+	interface ContributionData {
+		from: string;
+		to: string;
+		total: number;
+		colors: string[];
+		days: ContributionDay[];
+	}
+
+	const dayInMs = 86_400_000;
+	const usernamePattern = /^(?!.*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+	const invalidDataMessage = '기여 데이터 형식이 올바르지 않습니다. 잠시 후 다시 시도해 주세요.';
+
+	function record(value: unknown): Record<string, unknown> {
+		if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+			throw new Error(invalidDataMessage);
+		}
+		return value as Record<string, unknown>;
+	}
+
+	function dateTimestamp(value: unknown): number {
+		if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+			throw new Error(invalidDataMessage);
+		}
+		const timestamp = Date.parse(`${value}T00:00:00Z`);
+		if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== value) {
+			throw new Error(invalidDataMessage);
+		}
+		return timestamp;
+	}
+
+	function nonnegativeInteger(value: unknown): value is number {
+		return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+	}
+
+	function parseContributions(value: unknown): ContributionData {
+		const data = record(value);
+		const from = dateTimestamp(data.from);
+		const to = dateTimestamp(data.to);
+		if (
+			data.schema !== 'v2' || from > to || !nonnegativeInteger(data.total_contributions) ||
+			!Array.isArray(data.colors_full) || data.colors_full.length === 0 ||
+			!Array.isArray(data.weeks)
+		) {
+			throw new Error(invalidDataMessage);
+		}
+		const colors = data.colors_full.map((color: unknown) => {
+			if (typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) {
+				throw new Error(invalidDataMessage);
+			}
+			return color;
+		});
+		const days: ContributionDay[] = [];
+		for (const value of data.weeks) {
+			const week = record(value);
+			const firstDay = dateTimestamp(week.first_day);
+			if (new Date(firstDay).getUTCDay() !== 0 || !Array.isArray(week.contribution_days)) {
+				throw new Error(invalidDataMessage);
+			}
+			for (const value of week.contribution_days) {
+				const day = record(value);
+				if (
+					!nonnegativeInteger(day.weekday) || day.weekday > 6 ||
+					!nonnegativeInteger(day.count) || !nonnegativeInteger(day.level) ||
+					day.level >= colors.length
+				) {
+					throw new Error(invalidDataMessage);
+				}
+				const timestamp = firstDay + day.weekday * dayInMs;
+				if (timestamp >= from && timestamp <= to) {
+					days.push({
+						date: new Date(timestamp).toISOString().slice(0, 10),
+						count: day.count,
+						level: day.level,
+					});
+				}
+			}
+		}
+		days.sort((a, b) => a.date.localeCompare(b.date));
+		if (
+			days.length !== (to - from) / dayInMs + 1 ||
+			days.some((day, index) => dateTimestamp(day.date) !== from + index * dayInMs)
+		) {
+			throw new Error(invalidDataMessage);
+		}
+		return {
+			from: new Date(from).toISOString().slice(0, 10),
+			to: new Date(to).toISOString().slice(0, 10),
+			total: data.total_contributions,
+			colors,
+			days,
+		};
+	}
+
+	function element<T extends HTMLElement>(selector: string, parent: ParentNode = document): T {
+		const node = parent.querySelector<T>(selector);
+		if (!node) throw new Error(`필수 화면 요소를 찾을 수 없습니다: ${selector}`);
+		return node;
+	}
+
+	const form = element<HTMLFormElement>('#battle-form');
+	const inputs = [element<HTMLInputElement>('#player-1'), element<HTMLInputElement>('#player-2')];
+	const button = element<HTMLButtonElement>('button', form);
+	const status = element('#battle-status');
+	const error = element('#battle-error');
+	const results = element('#results');
+	const winner = element('#winner');
+	const numberFormat = new Intl.NumberFormat('ko-KR');
+	let loading = false;
+
+	async function fetchContributions(username: string, player: number): Promise<ContributionData> {
+		try {
+			const response = await fetch(`/api/contributions/${encodeURIComponent(username)}`, {
+				signal: AbortSignal.timeout(20_000),
+			});
+			if (!response.ok) {
+				const messages: Record<number, string> = {
+					400: 'GitHub 사용자 이름 형식을 확인해 주세요.',
+					404: '사용자 또는 기여 데이터를 찾을 수 없습니다.',
+					429: 'GitHub 요청 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.',
+				};
+				throw new Error(messages[response.status] ?? '기여 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
+			}
+			let data: unknown;
+			try {
+				data = await response.json();
+			} catch {
+				throw new Error(invalidDataMessage);
+			}
+			return parseContributions(data);
+		} catch (cause) {
+			let message = '네트워크 연결을 확인하고 다시 시도해 주세요.';
+			if (cause instanceof Error) {
+				if (cause.name === 'TimeoutError' || cause.name === 'AbortError') {
+					message = '요청 시간이 초과되었습니다. 다시 시도해 주세요.';
+				} else if (!(cause instanceof TypeError)) {
+					message = cause.message;
+				}
+			}
+			throw new Error(`플레이어 ${player} (${username}): ${message}`);
+		}
+	}
+
+	function renderPlayer(player: number, username: string, data: ContributionData) {
+		const card = element(`#result-${player}`);
+		element('h3', card).textContent = username;
+		element('.total', card).textContent = `총 기여 수: ${numberFormat.format(data.total)}회`;
+		element('.date-range', card).textContent = `${data.from} ~ ${data.to}`;
+		const graph = element<HTMLUListElement>('.graph', card);
+		const fragment = document.createDocumentFragment();
+		const offset = new Date(dateTimestamp(data.from)).getUTCDay();
+		data.days.forEach((day, index) => {
+			const cell = document.createElement('li');
+			const description = `${day.date}: 기여 ${numberFormat.format(day.count)}회`;
+			cell.title = description;
+			cell.style.backgroundColor = data.colors[day.level];
+			cell.style.gridColumn = String(Math.floor((offset + index) / 7) + 1);
+			cell.style.gridRow = String((offset + index) % 7 + 1);
+			const text = document.createElement('span');
+			text.className = 'sr-only';
+			text.textContent = description;
+			cell.append(text);
+			fragment.append(cell);
+		});
+		graph.replaceChildren(fragment);
+		element('.swatches', card).replaceChildren(...data.colors.map((color) => {
+			const swatch = document.createElement('span');
+			swatch.style.backgroundColor = color;
+			return swatch;
+		}));
+	}
+
+	form.addEventListener('submit', async (event) => {
+		event.preventDefault();
+		if (loading) return;
+		results.hidden = true;
+		winner.textContent = '';
+		status.textContent = '';
+		error.textContent = '';
+		for (const input of inputs) input.removeAttribute('aria-invalid');
+		for (const [index, input] of inputs.entries()) {
+			input.value = input.value.trim();
+			if (!usernamePattern.test(input.value)) {
+				error.textContent = input.value
+					? `플레이어 ${index + 1}: 올바른 GitHub 사용자 이름을 입력해 주세요. 영문·숫자와 중간 하이픈만 사용하며, 연속 하이픈 없이 39자 이하여야 합니다.`
+					: `플레이어 ${index + 1}: GitHub 사용자 이름을 입력해 주세요.`;
+				input.setAttribute('aria-invalid', 'true');
+				input.focus();
+				return;
+			}
+		}
+		const [playerOne, playerTwo] = inputs.map((input) => input.value);
+		loading = true;
+		form.setAttribute('aria-busy', 'true');
+		for (const input of inputs) input.disabled = true;
+		button.disabled = true;
+		button.textContent = '조회 중…';
+		status.textContent = '두 플레이어의 기여 데이터를 불러오는 중입니다.';
+		try {
+			const [one, two] = await Promise.all([
+				fetchContributions(playerOne, 1),
+				fetchContributions(playerTwo, 2),
+			]);
+			if (one.from !== two.from || one.to !== two.to) {
+				throw new Error('두 플레이어의 조회 기간이 다릅니다. 잠시 후 다시 시도해 주세요.');
+			}
+			renderPlayer(1, playerOne, one);
+			renderPlayer(2, playerTwo, two);
+			const announcement = one.total === two.total
+				? '무승부! 두 플레이어의 기여 수가 같습니다.'
+				: `${one.total > two.total ? playerOne : playerTwo} 승리!`;
+			winner.textContent = announcement;
+			results.hidden = false;
+			status.textContent = `배틀 완료. ${announcement}`;
+		} catch (cause) {
+			status.textContent = '';
+			error.textContent = cause instanceof Error ? cause.message : '배틀을 완료하지 못했습니다. 다시 시도해 주세요.';
+		} finally {
+			loading = false;
+			form.setAttribute('aria-busy', 'false');
+			for (const input of inputs) input.disabled = false;
+			button.disabled = false;
+			button.textContent = '배틀 시작';
+		}
+	});
+</script>
+
+<style>
+	:global(*) { box-sizing: border-box; }
+	:global(body) {
+		margin: 0;
+		background: #0a0a1a;
+		color: #eeeeF5;
+		font-family: system-ui, sans-serif;
+		line-height: 1.6;
+		color-scheme: dark;
+	}
+	main { max-width: 1100px; margin: 0 auto; padding: 2rem 1rem; }
+	header { margin-bottom: 2rem; }
+	h1 { margin-bottom: 0; color: #5fed83; overflow-wrap: anywhere; }
+	header p { margin: 0.5rem 0; }
+	.players { display: flex; gap: 1rem; }
+	.player-input { flex: 1; min-width: 0; }
+	label { display: block; margin-bottom: 0.5rem; font-weight: 700; }
+	input, button { font: inherit; padding: 0.75rem 1rem; border: 1px solid #77778e; border-radius: 6px; }
+	input { width: 100%; background: #16162b; color: inherit; }
+	input[aria-invalid="true"] { border-color: #ffaaaa; }
+	button { background: #5fed83; color: #0a0a1a; font-weight: 700; cursor: pointer; }
+	button:hover:not(:disabled) { background: #91f5aa; }
+	button:disabled, input:disabled { opacity: 0.65; cursor: wait; }
+	:global(:focus-visible) { outline: 3px solid #d3b5ff; outline-offset: 3px; }
+	#battle-rules, .date-range, .legend { color: #bdbdd0; font-size: 0.9rem; }
+	#battle-error { color: #ffaaaa; overflow-wrap: anywhere; }
+	#winner { font-size: 1.25rem; font-weight: 700; }
+	.result-cards { display: flex; align-items: center; gap: 1rem; }
+	article { flex: 1; min-width: 0; width: 100%; padding: 1rem; background: #16162b; border: 1px solid #5fed83; border-radius: 8px; }
+	article:last-child { border-color: #ba93ef; }
+	h3 { margin-top: 0; overflow-wrap: anywhere; }
+	.versus { align-self: center; flex-shrink: 0; margin: 0; padding: 0.4rem 0.65rem; border: 1px solid #77778e; border-radius: 6px; font-weight: 700; }
+	.graph-scroll { position: relative; overflow-x: auto; padding: 4px; }
+	.graph { display: grid; grid-template-rows: repeat(7, 12px); grid-auto-columns: 12px; gap: 3px; width: max-content; margin: 0; padding: 0; list-style: none; }
+	.graph :global(li), .swatches :global(span) { width: 12px; height: 12px; border-radius: 2px; }
+	.legend, .swatches { display: flex; align-items: center; gap: 4px; }
+	.legend { justify-content: flex-end; margin-top: 0.5rem; }
+	:global(.sr-only) { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+	@media (max-width: 700px) {
+		.players, .result-cards { flex-direction: column; align-items: stretch; }
+		.versus { margin: 0; text-align: center; }
+		button { width: 100%; }
+	}
+</style>
